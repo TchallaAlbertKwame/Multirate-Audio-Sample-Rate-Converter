@@ -38,6 +38,19 @@ class TwoStagePolyphaseSRC:
         self.fs_intermediate = 48000  # 96000 / 2
         self.fs_output = 44100        # 48000 * (147/160)
         
+        # --- Architecture summary (helps verify integer factors) ---
+        self.combined_L = self.stage1_L * self.stage2_L
+        self.combined_M = self.stage1_M * self.stage2_M
+        combined_ratio = self.combined_L / self.combined_M
+        print(f"Architecture: Stage1 L/M = {self.stage1_L}/{self.stage1_M}, "
+              f"Stage2 L/M = {self.stage2_L}/{self.stage2_M}")
+        print(f"Combined ratio: {self.combined_L}/{self.combined_M} = {combined_ratio:.6f}")
+        expected_ratio = self.fs_output / self.fs_input
+        if abs(combined_ratio - expected_ratio) < 1e-9:
+            print("✅ Combined ratio matches target sample-rate conversion")
+        else:
+            print("❌ Combined ratio does NOT match target – check factors")
+        
         # Design filters for both stages
         self._design_filters()
         
@@ -103,10 +116,13 @@ class TwoStagePolyphaseSRC:
     def _design_parks_mcclellan_filters(self):
         """Design optimal filters using Parks-McClellan algorithm"""
         # Stage 1: Parks-McClellan design
-        f1 = [0, self.stage1_cutoff, self.stage1_cutoff + self.stage1_transition_width, 
-              self.fs_input/2] / (self.fs_input/2)
-        a1 = [1, 1, 0, 0]
-        w1 = [1, 10**(self.stopband_attenuation_db/20)]  # Weight stopband more heavily
+        f1 = np.array([0, self.stage1_cutoff, self.stage1_cutoff + self.stage1_transition_width,
+              self.fs_input/2]) / (self.fs_input/2)
+        a1 = [1, 0]
+        # Determine weighting based on allowable ripples (δ = absolute ripple)
+        delta_p = 10**(self.passband_ripple_db/20) - 1
+        delta_s = 10**(-self.stopband_attenuation_db/20)
+        w1 = [1, delta_p / delta_s]  # Weight stopband relative to passband
         
         # Estimate filter length for Parks-McClellan
         N1_est = int(2 * self.stopband_attenuation_db * self.fs_input / 
@@ -122,10 +138,12 @@ class TwoStagePolyphaseSRC:
             return
             
         # Stage 2: Parks-McClellan design
-        f2 = [0, self.stage2_cutoff, self.stage2_cutoff + self.stage2_transition_width,
-              self.fs_intermediate/2] / (self.fs_intermediate/2)
-        a2 = [1, 1, 0, 0]
-        w2 = [1, 10**(self.stopband_attenuation_db/20)]
+        f2 = np.array([0, self.stage2_cutoff, self.stage2_cutoff + self.stage2_transition_width,
+              self.fs_intermediate/2]) / (self.fs_intermediate/2)
+        a2 = [1, 0]
+        delta_p = 10**(self.passband_ripple_db/20) - 1
+        delta_s = 10**(-self.stopband_attenuation_db/20)
+        w2 = [1, delta_p / delta_s]
         
         N2_est = int(2 * self.stopband_attenuation_db * self.fs_intermediate / 
                     (22 * self.stage2_transition_width)) + 1
